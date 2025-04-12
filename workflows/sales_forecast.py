@@ -1,9 +1,9 @@
-# 📦 完整 Production-Ready Colab 程式碼 + 模型評估報告 + SKU 清單 + 模型說明 + Slack 通知 + API 重試機制 (模擬版)
+# 📦 Production Python Script for GitHub Actions - Sales Forecast Model
 
-# === 載入套件 ===
 import pandas as pd
 import requests
 import time
+import os
 from datetime import datetime, timedelta
 import xgboost as xgb
 from sklearn.preprocessing import LabelEncoder
@@ -19,11 +19,14 @@ REPORT_SHEET_NAME = "report"
 NEW_SKU_SHEET_NAME = "new_skus"
 MODEL_DESCRIPTION_SHEET_NAME = "model_description"
 
-# === 設定 Slack Webhook URL ===
-SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/xxxx/yyyy/zzzz"  # <-- 這裡換成你的 Slack Webhook URL
+# === 從環境變數讀取 Slack Webhook URL ===
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 
 # === Function：發送 Slack 通知 ===
 def send_slack_message(message):
+    if not SLACK_WEBHOOK_URL:
+        print("⚠️ Slack Webhook URL 未設置，略過通知。")
+        return
     payload = {"text": message}
     try:
         requests.post(SLACK_WEBHOOK_URL, json=payload)
@@ -62,28 +65,19 @@ def write_to_gsheet(df, sheet_id, sheet_name):
     set_with_dataframe(worksheet, df)
 
 try:
-    # === 1. API 資料拉取 ===
-    print("📥 讀取 API 資料...")
-    sales_url = "https://api.besparks.co/api:074LNDs2/data/slaes_history"
-    product_url = "https://api.besparks.co/api:074LNDs2/data/product_info"
-    forecast_url = "https://api.besparks.co/api:074LNDs2/data/forecast"
-
-    sales_data = fetch_data_with_retry(sales_url)
-    product_data = fetch_data_with_retry(product_url)
-    forecast_data = fetch_data_with_retry(forecast_url)
+    print("📥 開始讀取 API 資料...")
+    sales_data = fetch_data_with_retry("https://api.besparks.co/api:074LNDs2/data/slaes_history")
+    product_data = fetch_data_with_retry("https://api.besparks.co/api:074LNDs2/data/product_info")
+    forecast_data = fetch_data_with_retry("https://api.besparks.co/api:074LNDs2/data/forecast")
 
     sales_df = pd.DataFrame(sales_data)
     product_df = pd.DataFrame(product_data)
     forecast_df = pd.DataFrame(forecast_data)
-
     sales_df['date'] = pd.to_datetime(sales_df['date'], format='%Y-%m')
 
-    print(f"✅ Sales history 筆數：{len(sales_df)}")
-    print(f"✅ Product info 筆數：{len(product_df)}")
+    print("✅ API 資料讀取完成")
 
-    # === 2. 數據清洗 & 特徵工程 ===
     print("🧩 數據清洗與特徵工程...")
-
     product_df = ensure_columns(product_df, ['price', 'sku_cost', 'gross_margin'])
     product_df['price'] = pd.to_numeric(product_df.get('price', product_df.get('msrp', 0)), errors='coerce').fillna(0)
     product_df['sku_cost'] = pd.to_numeric(product_df['sku_cost'], errors='coerce').fillna(0)
@@ -91,7 +85,6 @@ try:
 
     merged_df = sales_df.merge(product_df, on='sku', how='left', suffixes=('', '_prod'))
     merged_df = ensure_columns(merged_df, ['price_prod', 'sku_cost_prod', 'gross_margin_prod'])
-
     merged_df['price'] = merged_df['price_prod'].fillna(0)
     merged_df['sku_cost'] = merged_df['sku_cost_prod'].fillna(0)
     merged_df['gross_margin'] = merged_df['gross_margin_prod'].fillna(0)
@@ -110,25 +103,20 @@ try:
     for col in feature_columns:
         merged_df[col] = pd.to_numeric(merged_df[col], errors='coerce').fillna(0)
 
-    features = feature_columns
-    target = 'quantity_sold'
-
     print("✅ 特徵工程完成")
 
-    # === 3. 模型訓練 ===
-    print("🧠 模型訓練中...")
-    dtrain = xgb.DMatrix(merged_df[features], label=merged_df[target])
+    print("🧠 開始模型訓練...")
+    dtrain = xgb.DMatrix(merged_df[feature_columns], label=merged_df['quantity_sold'])
     params = {'objective': 'reg:squarederror', 'eval_metric': 'rmse'}
     model = xgb.train(params, dtrain, num_boost_round=100)
 
     preds_train = model.predict(dtrain)
-    mae = mean_absolute_error(merged_df[target], preds_train)
-    mape = mean_absolute_percentage_error(merged_df[target], preds_train)
+    mae = mean_absolute_error(merged_df['quantity_sold'], preds_train)
+    mape = mean_absolute_percentage_error(merged_df['quantity_sold'], preds_train)
+
     print(f"✅ 模型訓練完成，MAE: {mae:.2f}, MAPE: {mape:.2%}")
 
-    # === 4. 預測未來三個月 ===
     print("🔮 預測未來三個月...")
-
     future_months = [datetime.today() + timedelta(days=30 * i) for i in range(1, 4)]
     future_df = pd.DataFrame({'month': [d.month for d in future_months], 'year': [d.year for d in future_months]})
     future_skus = product_df['sku'].unique()
@@ -137,7 +125,6 @@ try:
     sku_mapping = dict(zip(sku_encoder.classes_, sku_encoder.transform(sku_encoder.classes_)))
     future_df['sku_encoded'] = future_df['sku'].map(sku_mapping).fillna(-1).astype(int)
 
-    product_df = ensure_columns(product_df, ['price', 'sku_cost', 'gross_margin'])
     latest_product_info = product_df[['sku', 'price', 'sku_cost', 'gross_margin']].drop_duplicates('sku')
     future_df = future_df.merge(latest_product_info, on='sku', how='left')
 
@@ -145,54 +132,31 @@ try:
     last_sales.rename(columns={'quantity_sold': 'prev_1_month_qty'}, inplace=True)
     future_df = future_df.merge(last_sales, on='sku', how='left')
 
-    future_df = ensure_columns(future_df, features)
-    for col in features:
+    future_df = ensure_columns(future_df, feature_columns)
+    for col in feature_columns:
         future_df[col] = pd.to_numeric(future_df[col], errors='coerce').fillna(0)
 
-    dfmatrix = xgb.DMatrix(future_df[features])
-    future_df['forecast_qty'] = model.predict(dfmatrix).round().astype(int)
+    dfmatrix = xgb.DMatrix(future_df[feature_columns])
+    future_df['forecast_qty'] = model.predict(dfmatrix).round().astype(int).apply(lambda x: max(x, 0))
 
-    future_df['forecast_qty'] = future_df['forecast_qty'].apply(lambda x: max(x, 0))
-
-    # === 5. 整理輸出格式 ===
-    print("📊 整理輸出格式...")
     result = future_df.pivot(index='sku', columns='month', values='forecast_qty').reset_index()
     month_map = {m: f'未來{i+1}個月銷售預測' for i, m in enumerate(result.columns[1:])}
     result.rename(columns=month_map, inplace=True)
-    print(result.head())
 
-    # === 6. 輸出到 Google Sheet ===
-    print("📝 寫入 Google Sheet...")
+    print("📝 輸出 Google Sheet 報表...")
     write_to_gsheet(result, SHEET_ID, SHEET_NAME)
 
-    # === 7. 輸出模型效果報告到 Google Sheet ===
-    print("📝 寫入模型效果報告...")
-    report_df = pd.DataFrame({
-        '指標': ['MAE', 'MAPE'],
-        '數值': [mae, mape]
-    })
+    report_df = pd.DataFrame({'指標': ['MAE', 'MAPE'], '數值': [mae, mape]})
     write_to_gsheet(report_df, SHEET_ID, REPORT_SHEET_NAME)
 
-    # === 8. 新品 SKU 清單 ===
-    print("🧾 輸出新品 SKU 清單...")
     known_skus = set(merged_df['sku'].unique())
     all_skus = set(product_df['sku'].unique())
     new_skus = all_skus - known_skus
     new_sku_df = pd.DataFrame({'新品 SKU': list(new_skus)})
     write_to_gsheet(new_sku_df, SHEET_ID, NEW_SKU_SHEET_NAME)
 
-    # === 9. 輸出模型說明文件到 Google Sheet ===
-    print("🧾 輸出模型說明文件...")
     model_description_df = pd.DataFrame({
-        '項目': [
-            '模型類型',
-            '預測目標',
-            '使用特徵',
-            '數據來源',
-            '準確率指標',
-            '模型訓練次數',
-            '特別說明'
-        ],
+        '項目': ['模型類型', '預測目標', '使用特徵', '數據來源', '準確率指標', '模型訓練次數', '特別說明'],
         '說明': [
             'XGBoost Regressor',
             'SKU 每月銷量',

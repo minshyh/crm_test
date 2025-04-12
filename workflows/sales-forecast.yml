@@ -2,7 +2,7 @@ name: Sales Forecast Automation
 
 on:
   schedule:
-    - cron: '0 0 1 * *'  # 每月 1 號 UTC 00:00
+    - cron: '0 0 14 * *'  # 每月 1 號 UTC 00:00
   workflow_dispatch:  # 手動觸發
 
 jobs:
@@ -24,4 +24,4 @@ jobs:
 
       - name: Run Sales Forecast Script
         run: |
-          python your_script.py  # 你要改成你的 Python 檔名
+          python sales_forecast.py  # 你要改成你的 Python 檔名

@@ -1,0 +1,27 @@
+name: Sales Forecast Automation
+
+on:
+  schedule:
+    - cron: '0 0 1 * *'  # 每月 1 號 UTC 00:00
+  workflow_dispatch:  # 手動觸發
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests xgboost gspread gspread_dataframe google-auth scikit-learn
+
+      - name: Run Sales Forecast Script
+        run: |
+          python your_script.py  # 你要改成你的 Python 檔名

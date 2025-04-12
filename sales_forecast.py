@@ -3,6 +3,7 @@
 import pandas as pd
 import requests
 import time
+import numpy as np
 import os
 from datetime import datetime, timedelta
 import xgboost as xgb
@@ -137,7 +138,7 @@ try:
         future_df[col] = pd.to_numeric(future_df[col], errors='coerce').fillna(0)
 
     dfmatrix = xgb.DMatrix(future_df[feature_columns])
-    future_df['forecast_qty'] = model.predict(dfmatrix).round().astype(int).apply(lambda x: max(x, 0))
+    future_df['forecast_qty'] = np.maximum(model.predict(dfmatrix).round().astype(int), 0)
 
     result = future_df.pivot(index='sku', columns='month', values='forecast_qty').reset_index()
     month_map = {m: f'未來{i+1}個月銷售預測' for i, m in enumerate(result.columns[1:])}

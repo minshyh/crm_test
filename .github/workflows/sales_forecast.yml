@@ -1,0 +1,36 @@
+name: Sales Forecast Automation
+
+on:
+  schedule:
+    - cron: '0 0 14 * *'  # 每月 1 號 UTC 00:00 執行
+  workflow_dispatch:  # 手動觸發
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas requests xgboost gspread gspread_dataframe google-auth scikit-learn
+
+    - name: Add Google Service Account
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+      run: |
+        echo "$GOOGLE_CREDENTIALS" > besparks-service-account.json
+
+    - name: Run Sales Forecast
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      run: |
+        python sales_forecast.py

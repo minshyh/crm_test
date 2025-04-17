@@ -1,17 +1,16 @@
-# 📦 Production Python Script for GitHub Actions - Sales Forecast Model
-
 import pandas as pd
 import requests
 import time
+from datetime import datetime
 import numpy as np
-import os
-from datetime import datetime, timedelta
-import xgboost as xgb
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
+from sklearn.metrics import mean_squared_error  # 引入誤差評估函式
 from google.oauth2.service_account import Credentials
 import gspread
 from gspread_dataframe import set_with_dataframe
+
+SHEET_ID = "1ufAI8OY64NKrpLS17qlYuOX5HWgGlCyZsgPRC-NfQJI"
+SHEET_NAME = "sheet1"
+MODEL_DESCRIPTION_SHEET_NAME = "model_description"
 
 # === 設定 Google Sheet ===
 SHEET_ID = "1ufAI8OY64NKrpLS17qlYuOX5HWgGlCyZsgPRC-NfQJI"
@@ -65,114 +64,187 @@ def write_to_gsheet(df, sheet_id, sheet_name):
     worksheet.clear()
     set_with_dataframe(worksheet, df)
 
+# === 主流程 ===
 try:
-    print("📥 開始讀取 API 資料...")
-    sales_data = fetch_data_with_retry("https://api.besparks.co/api:074LNDs2/data/slaes_history")
-    product_data = fetch_data_with_retry("https://api.besparks.co/api:074LNDs2/data/product_info")
-    forecast_data = fetch_data_with_retry("https://api.besparks.co/api:074LNDs2/data/forecast")
+   sales_data = fetch_data_with_retry("https://api.besparks.co/api:074LNDs2/data/sales_history")
+   product_data = fetch_data_with_retry("https://api.besparks.co/api:074LNDs2/data/product_info")
 
-    sales_df = pd.DataFrame(sales_data)
-    product_df = pd.DataFrame(product_data)
-    forecast_df = pd.DataFrame(forecast_data)
-    sales_df['date'] = pd.to_datetime(sales_df['date'], format='%Y-%m')
 
-    print("✅ API 資料讀取完成")
+   sales_df = pd.DataFrame(sales_data)
+   product_df = pd.DataFrame(product_data)
+   forecast_df = pd.DataFrame()
 
-    print("🧩 數據清洗與特徵工程...")
-    product_df = ensure_columns(product_df, ['price', 'sku_cost', 'gross_margin'])
-    product_df['price'] = pd.to_numeric(product_df.get('price', product_df.get('msrp', 0)), errors='coerce').fillna(0)
-    product_df['sku_cost'] = pd.to_numeric(product_df['sku_cost'], errors='coerce').fillna(0)
-    product_df['gross_margin'] = product_df['price'] - product_df['sku_cost']
 
-    merged_df = sales_df.merge(product_df, on='sku', how='left', suffixes=('', '_prod'))
-    merged_df = ensure_columns(merged_df, ['price_prod', 'sku_cost_prod', 'gross_margin_prod'])
-    merged_df['price'] = merged_df['price_prod'].fillna(0)
-    merged_df['sku_cost'] = merged_df['sku_cost_prod'].fillna(0)
-    merged_df['gross_margin'] = merged_df['gross_margin_prod'].fillna(0)
+   # 數值轉換
+   sales_df['quantity_sold'] = pd.to_numeric(sales_df['quantity_sold'], errors='coerce')
+   product_df['price'] = pd.to_numeric(product_df['price'], errors='coerce')
+   product_df['gross_margin'] = pd.to_numeric(product_df['gross_margin'], errors='coerce')
 
-    merged_df['month'] = merged_df['date'].dt.month
-    merged_df['year'] = merged_df['date'].dt.year
-    sku_encoder = LabelEncoder()
-    merged_df['sku_encoded'] = sku_encoder.fit_transform(merged_df['sku'])
 
-    merged_df = merged_df.sort_values(['sku', 'date'])
-    merged_df['prev_1_month_qty'] = merged_df.groupby('sku')['quantity_sold'].shift(1).fillna(0)
-    merged_df['rolling_3_month_qty'] = merged_df.groupby('sku')['quantity_sold'].transform(lambda x: x.shift(1).rolling(3, min_periods=1).mean()).fillna(0)
-    merged_df['rolling_6_month_qty'] = merged_df.groupby('sku')['quantity_sold'].transform(lambda x: x.shift(1).rolling(6, min_periods=1).mean()).fillna(0)
+   # 商品篩選
+   product_df['type'] = product_df['type'].astype(str).str.lower()
+   product_df['is_tangible'] = product_df['is_tangible'].astype(str).str.lower() == 'true'
+   product_df = product_df[
+       (product_df['type'] == 'single') &
+       (product_df['is_tangible']) &
+       (product_df['status'] != 'archived') &
+       (~product_df['product_line'].isin(['Accessories', 'Others', 'Packaging', 'Raw Materials', 'Promotion Bundle']))
+   ].copy()
 
-    feature_columns = ['month', 'year', 'sku_encoded', 'prev_1_month_qty', 'rolling_3_month_qty', 'rolling_6_month_qty', 'price', 'gross_margin']
-    for col in feature_columns:
-        merged_df[col] = pd.to_numeric(merged_df[col], errors='coerce').fillna(0)
 
-    print("✅ 特徵工程完成")
+   sales_df['date'] = pd.to_datetime(sales_df['date'], format='%Y-%m')
+   latest_date = sales_df['date'].max()
 
-    print("🧠 開始模型訓練...")
-    dtrain = xgb.DMatrix(merged_df[feature_columns], label=merged_df['quantity_sold'])
-    params = {'objective': 'reg:squarederror', 'eval_metric': 'rmse'}
-    model = xgb.train(params, dtrain, num_boost_round=100)
 
-    preds_train = model.predict(dtrain)
-    mae = mean_absolute_error(merged_df['quantity_sold'], preds_train)
-    mape = mean_absolute_percentage_error(merged_df['quantity_sold'], preds_train)
+   # 聚合為 SKU × 月維度 + B2C 篩選
+   # sales_df = sales_df[sales_df['channel_type'] == 'B2C']
+   sales_df['month'] = sales_df['date'].dt.to_period('M')
+   monthly_sales = sales_df.groupby(['sku', 'month'])['quantity_sold'].sum().reset_index()
+   monthly_sales['date'] = monthly_sales['month'].dt.to_timestamp()
 
-    print(f"✅ 模型訓練完成，MAE: {mae:.2f}, MAPE: {mape:.2%}")
 
-    print("🔮 預測未來三個月...")
-    future_months = [datetime.today() + timedelta(days=30 * i) for i in range(1, 4)]
-    future_df = pd.DataFrame({'month': [d.month for d in future_months], 'year': [d.year for d in future_months]})
-    future_skus = product_df['sku'].unique()
-    future_df = future_df.assign(key=1).merge(pd.DataFrame({'sku': future_skus, 'key': 1}), on='key').drop('key', axis=1)
+   # 合併產品資料
+   full_df = monthly_sales.merge(product_df, on='sku', how='inner')
 
-    sku_mapping = dict(zip(sku_encoder.classes_, sku_encoder.transform(sku_encoder.classes_)))
-    future_df['sku_encoded'] = future_df['sku'].map(sku_mapping).fillna(-1).astype(int)
 
-    latest_product_info = product_df[['sku', 'price', 'sku_cost', 'gross_margin']].drop_duplicates('sku')
-    future_df = future_df.merge(latest_product_info, on='sku', how='left')
+   # 預測公式
+   def weighted_average(group, weights):
+       # 排除當月資料以免低估
+       historical = group[group['date'] < latest_date]
+       recent_1m = historical[historical['date'] == latest_date - pd.DateOffset(months=1)]['quantity_sold'].sum()
+       recent_3m = historical[historical['date'] >= latest_date - pd.DateOffset(months=3)]['quantity_sold'].mean()
+       recent_6m = historical[historical['date'] >= latest_date - pd.DateOffset(months=6)]['quantity_sold'].mean()
+       return weights[0] * recent_1m + weights[1] * recent_3m + weights[2] * recent_6m
+  # === 回測函數 ===
+   def backtest(df, weights, split_date):
+      train = df[df['date'] < split_date].copy()
+      test = df[df['date'] >= split_date].copy()
+        
+      predictions = train.groupby('sku').apply(lambda x: weighted_average(x, weights)).reset_index(name='prediction')
+        
+      merged = test.merge(predictions, on='sku', how='left').fillna(0)  # 處理沒有預測值的 SKU
+      rmse = np.sqrt(mean_squared_error(merged['quantity_sold'], merged['prediction']))
+      return rmse
 
-    last_sales = merged_df[merged_df['date'] == merged_df['date'].max()][['sku', 'quantity_sold', 'rolling_3_month_qty', 'rolling_6_month_qty']].drop_duplicates('sku')
-    last_sales.rename(columns={'quantity_sold': 'prev_1_month_qty'}, inplace=True)
-    future_df = future_df.merge(last_sales, on='sku', how='left')
+   # === 權重組合 ===
+   weight_combinations = [
+      (0.5, 0.3, 0.2),
+      (0.6, 0.2, 0.2),
+      (0.4, 0.4, 0.2),
+      (0.3, 0.3, 0.4),
+      (0.7, 0.2, 0.1),
+      (0.1, 0.1, 0.8) # 增加多組權重
+    ]
 
-    future_df = ensure_columns(future_df, feature_columns)
-    for col in feature_columns:
-        future_df[col] = pd.to_numeric(future_df[col], errors='coerce').fillna(0)
+   # === 設定訓練集和測試集分割日期 ===
+   latest_date = sales_df['date'].max()
+   split_date = latest_date - pd.DateOffset(months=6)  # 例如，最後 6 個月作為測試集
 
-    dfmatrix = xgb.DMatrix(future_df[feature_columns])
-    future_df['forecast_qty'] = np.maximum(model.predict(dfmatrix).round().astype(int), 0)
+   # === 迴圈計算並評估 ===
+   results = []
+   for weights in weight_combinations:
+       rmse = backtest(full_df, weights, split_date)
+       results.append({'weights': weights, 'rmse': rmse})
 
-    result = future_df.pivot(index='sku', columns='month', values='forecast_qty').reset_index()
-    month_map = {m: f'未來{i+1}個月銷售預測' for i, m in enumerate(result.columns[1:])}
-    result.rename(columns=month_map, inplace=True)
+   results_df = pd.DataFrame(results)
+   best_weights = results_df.loc[results_df['rmse'].idxmin()]['weights']  # 找到 RMSE 最小的權重組合
 
-    print("📝 輸出 Google Sheet 報表...")
-    write_to_gsheet(result, SHEET_ID, SHEET_NAME)
+   print("回測結果:")
+   print(results_df)
+   print("\n最佳權重:", best_weights)
 
-    report_df = pd.DataFrame({'指標': ['MAE', 'MAPE'], '數值': [mae, mape]})
-    write_to_gsheet(report_df, SHEET_ID, REPORT_SHEET_NAME)
+   # === 使用最佳權重進行最終預測 ===
+   forecast_df = full_df.groupby('sku').apply(lambda x: weighted_average(x, best_weights)).reset_index(name='base_forecast')
 
-    known_skus = set(merged_df['sku'].unique())
-    all_skus = set(product_df['sku'].unique())
-    new_skus = all_skus - known_skus
-    new_sku_df = pd.DataFrame({'新品 SKU': list(new_skus)})
-    write_to_gsheet(new_sku_df, SHEET_ID, NEW_SKU_SHEET_NAME)
+   # Debug: 查看特定 SKU 預測來源細節
+   sku_to_check = 'BLK-P0001'
+   sku_group = full_df[full_df['sku'] == sku_to_check].copy()
+   print(f"=== ⏱ {sku_to_check} 原始近 6 個月彙總銷售 ===")
+   print(sku_group.sort_values('date')[['date', 'quantity_sold']].tail(6))
 
-    model_description_df = pd.DataFrame({
-        '項目': ['模型類型', '預測目標', '使用特徵', '數據來源', '準確率指標', '模型訓練次數', '特別說明'],
-        '說明': [
-            'XGBoost Regressor',
-            'SKU 每月銷量',
-            'month, year, sku_encoded, price, gross_margin, 過去1個月銷量, 滾動3/6個月銷量平均',
-            'API：sales_history, product_info',
-            'MAE / MAPE 已在 report 分頁',
-            '100 次迭代 (num_boost_round=100)',
-            'SKU 經 LabelEncoder 編碼，價格及毛利為主要影響因子之一'
-        ]
-    })
-    write_to_gsheet(model_description_df, SHEET_ID, MODEL_DESCRIPTION_SHEET_NAME)
 
-    send_slack_message("✅ [預測系統] 最新月份銷售預測已完成並上傳至 Google Sheet！")
-    print("✅ 預測流程已完成，請檢查 Google Sheet 報表！")
+   historical = sku_group[sku_group['date'] < latest_date]
+   q = historical['quantity_sold']
+   recent_1m = q[historical['date'] == latest_date - pd.DateOffset(months=1)].sum()
+   recent_3m = q[historical['date'] >= latest_date - pd.DateOffset(months=3)].mean()
+   recent_6m = q[historical['date'] >= latest_date - pd.DateOffset(months=6)].mean()
+
+
+   weighted = 0.5 * recent_1m + 0.3 * recent_3m + 0.2 * recent_6m
+   print(f"🔍 {sku_to_check} 加權計算細節：")
+   print(f" 近1個月總和: {recent_1m:.2f}")
+   print(f" 近3個月平均: {recent_3m:.2f}")
+   print(f" 近6個月平均: {recent_6m:.2f}")
+   print(f" ➡️ 預測加權值（未調整）: {weighted:.2f}")
+   forecast_df = forecast_df.merge(product_df[['sku', 'gross_margin', 'product_line', 'type']], on='sku', how='left')
+
+
+   def adjust_margin(row):
+       if pd.isna(row['base_forecast']) or pd.isna(row['gross_margin']):
+           return 0
+       elif row['gross_margin'] > 0.6:
+           return row['base_forecast'] * 1.2
+       elif row['gross_margin'] > 0.3:
+           return row['base_forecast'] * 1.1
+       else:
+           return row['base_forecast']
+
+
+   forecast_df['adjusted_forecast'] = forecast_df.apply(adjust_margin, axis=1).fillna(0).round().astype(int)
+
+
+   # fallback：新品補推
+   forecast_df['sku'] = forecast_df['sku'].fillna('')
+   product_df['sku'] = product_df['sku'].fillna('')
+   known_skus = set(forecast_df['sku'].dropna())
+   all_skus = set(product_df['sku'].dropna())
+   new_skus = list(all_skus - known_skus)
+
+
+   new_sku_df = product_df[product_df['sku'].isin(new_skus)].copy()
+   category_avg = forecast_df.groupby('product_line')['adjusted_forecast'].mean().to_dict()
+   new_sku_df['adjusted_forecast'] = new_sku_df['product_line'].map(category_avg).fillna(10).round().astype(int)
+
+
+   # 下一個月標籤
+   next_month = datetime.today().replace(day=1) + pd.DateOffset(months=1)
+   date_label = next_month.strftime('%Y-%m')
+   forecast_df[date_label] = forecast_df['adjusted_forecast']
+   new_sku_df[date_label] = new_sku_df['adjusted_forecast']
+
+
+   # 合併 + 輸出主預測表
+   final_df = pd.concat([forecast_df, new_sku_df])[['sku', 'type', 'product_line', date_label]]
+   write_to_gsheet(final_df, SHEET_ID, SHEET_NAME)
+
+
+   # QA 稽核表
+   all_forecast = pd.concat([forecast_df, new_sku_df]).copy()
+   all_forecast['fallback_used'] = all_forecast['sku'].isin(new_sku_df['sku'])
+   all_forecast['forecast_type'] = all_forecast['fallback_used'].map(lambda x: 'fallback' if x else 'historical')
+   qa_export = all_forecast[['sku', 'product_line', date_label, 'forecast_type']].copy()
+   qa_export = qa_export.rename(columns={date_label: 'forecast_value'})
+   write_to_gsheet(qa_export, SHEET_ID, 'qa_audit')
+
+
+   # 預測邏輯說明表
+   model_description_df = pd.DataFrame({
+       '項目': ['預測邏輯', '使用特徵', '特殊規則', '資料處理', '預測期間', '數據來源'],
+       '說明': [
+           '加權移動平均法（近1月60%，近3月30%，近6月10%）',
+           'sku, quantity_sold, gross_margin',
+           '毛利率調整（高+20%、中+10%、低不變）',
+           '過濾 B2C + 月彙總 + fallback 新品平均',
+           f'預測月份：{date_label}',
+           'API：sales_history, product_info'
+       ]
+   })
+   write_to_gsheet(model_description_df, SHEET_ID, MODEL_DESCRIPTION_SHEET_NAME)
+
+
+   send_slack_message(f"✅ [預測系統] 已完成 {date_label} 預測，主表與 QA 報表已寫入 Google Sheet")
+
 
 except Exception as e:
-    send_slack_message(f"🚨 [預測系統] 執行過程中發生錯誤：{e}")
-    print(f"❌ 發生錯誤：{e}")
+   print(f"Error: {e}")
+   send_slack_message(f"🚨 [預測系統] 執行錯誤：{str(e)}")

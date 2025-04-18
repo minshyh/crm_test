@@ -33,8 +33,12 @@ jobs:
         run: |
           # 創建 config.json 文件
           echo '${{ secrets.CONFIG_JSON }}' > config.json
-          # 創建 Google 憑證文件
-          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' | jq . > google-credentials.json
+          
+      - name: Add Google Service Account
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          echo "$GOOGLE_CREDENTIALS" > besparks-service-account.json
           
       - name: Run Poya Spider
         env:

@@ -1,0 +1,53 @@
+name: Poya Sales Spider
+
+on:
+  schedule:
+    # 每天早上 8:00 (UTC時間，請根據需要調整)
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    # 手動觸發選項
+    inputs:
+      mode:
+        description: '爬取模式 (daily/backfill)'
+        required: true
+        default: 'daily'
+      backfill_date:
+        description: '回填起始日期 (YYYY-MM-DD)'
+        required: false
+
+jobs:
+  run-spider:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 pandas gspread gspread-dataframe google-auth
+          
+      - name: Create Google Credentials File
+        run: |
+          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > google-credentials.json
+          
+      - name: Run Poya Spider
+        env:
+          ENABLE_WRITE_TO_SHEET: ${{ secrets.ENABLE_WRITE_TO_SHEET }}
+          ENABLE_POST_TO_XANO: ${{ secrets.ENABLE_POST_TO_XANO }}
+          SCRAPE_MODE: ${{ github.event.inputs.mode || 'daily' }}
+          BACKFILL_START_DATE: ${{ github.event.inputs.backfill_date || '' }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          XANO_ENDPOINT: ${{ secrets.XANO_ENDPOINT }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          POYA_ACCOUNT: ${{ secrets.POYA_ACCOUNT }}
+          POYA_PASSWORD: ${{ secrets.POYA_PASSWORD }}
+          POYA_AUTH_PWD: ${{ secrets.POYA_AUTH_PWD }}
+          GOOGLE_APPLICATION_CREDENTIALS: "./google-credentials.json"
+        run: python poya_sales_spider.py

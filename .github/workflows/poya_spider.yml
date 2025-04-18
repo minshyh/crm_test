@@ -33,7 +33,7 @@ jobs:
         run: |
           # 創建 config.json 文件
           echo '${{ secrets.CONFIG_JSON }}' > config.json
-          # 仍然需要分開處理 Google 憑證
+          # 創建 Google 憑證文件
           echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > google-credentials.json
           
       - name: Run Poya Spider

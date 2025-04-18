@@ -37,7 +37,12 @@ class PoyaSalesSpider:
         # 從環境變數讀取設定
         # 從JSON檔案讀取設定
         config_path = os.environ.get("CONFIG_PATH", "config.json")
+        print(f"準備從 {config_path} 讀取設定")
         self.config = self._load_config(config_path)
+
+        # 打印設定內容和類型，以便調試
+        for key, value in self.config.items():
+            print(f"設定 {key} = {value} (類型: {type(value).__name__})")
         
         # 從設定檔讀取值
         self.enable_sheet = self._str_to_bool(self.config.get("ENABLE_WRITE_TO_SHEET", "True"))

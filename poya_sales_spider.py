@@ -80,11 +80,11 @@ class PoyaSalesSpider:
                 config_json = os.environ.get("CONFIG_JSON", "{}")
                 return json.loads(config_json)
 
-    except Exception as e:
-        print(f"讀取設定檔失敗: {e}")
-        # 發送Slack訊息報告錯誤
-        self._send_slack_message(f"讀取設定檔失敗: {e}")
-        # 返回空字典，使用預設值
+        except Exception as e:
+            print(f"讀取設定檔失敗: {e}")
+            # 發送Slack訊息報告錯誤
+            self._send_slack_message(f"讀取設定檔失敗: {e}")
+            # 返回空字典，使用預設值
         return {}
     
     def _str_to_bool(self, value: str) -> bool:

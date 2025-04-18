@@ -35,20 +35,25 @@ class PoyaSalesSpider:
     def __init__(self):
         """初始化爬蟲設定"""
         # 從環境變數讀取設定
-        self.enable_sheet = self._str_to_bool(os.environ.get("ENABLE_WRITE_TO_SHEET", "True"))
-        self.enable_xano = self._str_to_bool(os.environ.get("ENABLE_POST_TO_XANO", "True"))
-        self.mode = os.environ.get("SCRAPE_MODE", "daily").lower()  # "daily" or "backfill"
-        self.backfill_start = os.environ.get("BACKFILL_START_DATE", "")
+        # 從JSON檔案讀取設定
+        config_path = os.environ.get("CONFIG_PATH", "config.json")
+        self.config = self._load_config(config_path)
         
-        # 敏感設定從環境變數讀取
-        self.slack_webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
-        self.xano_endpoint = os.environ.get("XANO_ENDPOINT", "")
-        self.spreadsheet_id = os.environ.get("SPREADSHEET_ID", "")
+        # 從設定檔讀取值
+        self.enable_sheet = self._str_to_bool(self.config.get("ENABLE_WRITE_TO_SHEET", "True"))
+        self.enable_xano = self._str_to_bool(self.config.get("ENABLE_POST_TO_XANO", "True"))
+        self.mode = os.environ.get("SCRAPE_MODE", "daily").lower()  # 仍從環境變數讀取
+        self.backfill_start = os.environ.get("BACKFILL_START_DATE", "")  # 仍從環境變數讀取
+    
+        # 敏感設定從設定檔讀取
+        self.slack_webhook = self.config.get("SLACK_WEBHOOK_URL", "")
+        self.xano_endpoint = self.config.get("XANO_ENDPOINT", "")
+        self.spreadsheet_id = self.config.get("SPREADSHEET_ID", "")
         
         # 寶雅登入資訊
-        self.poya_account = os.environ.get("POYA_ACCOUNT", "")
-        self.poya_password = os.environ.get("POYA_PASSWORD", "")
-        self.poya_auth_pwd = os.environ.get("POYA_AUTH_PWD", "")
+        self.poya_account = self.config.get("POYA_ACCOUNT", "")
+        self.poya_password = self.config.get("POYA_PASSWORD", "")
+        self.poya_auth_pwd = self.config.get("POYA_AUTH_PWD", "")
         
         # URL設定
         self.login_url = "https://order.poya.com.tw/LoginCom.aspx"

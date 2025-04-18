@@ -34,7 +34,7 @@ jobs:
           # 創建 config.json 文件
           echo '${{ secrets.CONFIG_JSON }}' > config.json
           # 創建 Google 憑證文件
-          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > google-credentials.json
+          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' | jq . > google-credentials.json
           
       - name: Run Poya Spider
         env:

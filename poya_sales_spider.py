@@ -89,7 +89,14 @@ class PoyaSalesSpider:
     
     def _str_to_bool(self, value: str) -> bool:
         """將字串轉換為布林值"""
-        return value.lower() in ('true', 'yes', '1', 't', 'y')
+        if isinstance(value, bool):
+            return value
+    
+        if isinstance(value, str):
+            return value.lower() in ('true', 'yes', '1', 't', 'y')
+    
+        # 其他類型，例如 None 或數字
+        return bool(value)
     
     def _setup_date_range(self) -> None:
         """設定日期範圍"""

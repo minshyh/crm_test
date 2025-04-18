@@ -126,26 +126,13 @@ class PoyaSalesSpider:
     def _setup_google_sheet(self) -> None:
         """設定Google Sheet連接"""
         try:
-            # 使用環境變數或文件的服務帳號
-            if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
-                # 使用環境變數指定的文件路徑
-                creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-                self.creds = Credentials.from_service_account_file(
-                    creds_path,
-                    scopes=["https://www.googleapis.com/auth/spreadsheets"]
-                )
-            elif "GOOGLE_CREDENTIALS_JSON" in os.environ:
-                # 直接使用環境變數中的JSON內容
-                creds_json = json.loads(os.environ.get("GOOGLE_CREDENTIALS_JSON", "{}"))
-                self.creds = Credentials.from_service_account_info(
-                    creds_json,
-                    scopes=["https://www.googleapis.com/auth/spreadsheets"]
-                )
-            else:
-                logger.error("未找到Google服務憑證，無法使用Google Sheet功能")
-                self.enable_sheet = False
-                return
-                
+            # 使用 GitHub Actions 產生的 JSON 檔案
+            creds_path = "besparks-service-account.json"
+            self.creds = Credentials.from_service_account_file(
+                creds_path,
+                scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            )
+            
             self.gc = gspread.authorize(self.creds)
             self.sheet = self.gc.open_by_key(self.spreadsheet_id)
             logger.info("Google Sheet 設定成功")

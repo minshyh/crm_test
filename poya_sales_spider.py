@@ -381,10 +381,10 @@ class PoyaSalesSpider:
                         if xano_result:
                             df["銷售量"] = pd.to_numeric(df["銷售量"], errors="coerce")
                             filtered = df[df["銷售量"] > 0]
-                            self.send_slack_message(f"✅ {sheet_name} 匯入成功，共 {len(filtered)} 筆")
+                            self.send_slack_message(f"✅ 寶雅訂單 {sheet_name} 匯入成功，共 {len(filtered)} 筆")
                             results[sheet_name] = f"成功: {len(filtered)} 筆"
                         else:
-                            self.send_slack_message(f"⚠️ {sheet_name} Xano 匯入失敗")
+                            self.send_slack_message(f"⚠️ {sheet_name} Xano 寶雅訂單匯入失敗")
                             results[sheet_name] = "Xano匯入失敗"
                 else:
                     msg = f"⚠️ {sheet_name} 查無資料"

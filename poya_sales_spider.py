@@ -69,6 +69,24 @@ class PoyaSalesSpider:
         # 建立Session與重試機制
         self.session = self._create_retry_session()
         
+    def _load_config(self, config_path):
+        """讀取JSON設定檔"""
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            else:
+                # 如果檔案不存在，嘗試從環境變數讀取
+                config_json = os.environ.get("CONFIG_JSON", "{}")
+                return json.loads(config_json)
+
+    except Exception as e:
+        print(f"讀取設定檔失敗: {e}")
+        # 發送Slack訊息報告錯誤
+        self._send_slack_message(f"讀取設定檔失敗: {e}")
+        # 返回空字典，使用預設值
+        return {}
+    
     def _str_to_bool(self, value: str) -> bool:
         """將字串轉換為布林值"""
         return value.lower() in ('true', 'yes', '1', 't', 'y')
